@@ -1,7 +1,11 @@
 #[macro_use]
 extern crate serde;
 
-use std::{fmt, hash::{BuildHasher, Hasher}, path::Path};
+use std::{
+    fmt,
+    hash::{BuildHasher, Hasher},
+    path::Path,
+};
 
 #[global_allocator]
 static GLOBAL_ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
@@ -80,7 +84,7 @@ impl fmt::Debug for OpMetrics {
 
 #[cfg(feature = "sync")]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    use moka::sync::CacheBuilder;
+    use moka::sync::Cache;
     use std::fs;
     use std::time::Instant;
 
@@ -91,13 +95,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut metrics = OpMetrics::default();
 
-    let c = CacheBuilder::new(12960).build_with_hasher(DumbBuildHasher::default());
+    let c = Cache::<u64, (String, i64), _>::builder()
+        .max_capacity(1e6 as u64)
+        .weigher(|_k, (_v, cost)| {
+            // The cost is the len() of the value String.
+            (*cost)
+                .try_into()
+                .expect("Cannot convert the cost into u32")
+        })
+        .build_with_hasher(DumbBuildHasher::default());
     let time = Instant::now();
 
     for kv in dataset.data {
         metrics.gets_total += 1;
         if c.get(&kv.hash).is_none() {
-            c.insert(kv.hash, kv.val);
+            c.insert(kv.hash, (kv.val, kv.cost));
             metrics.miss += 1;
         } else {
             metrics.hit += 1;
@@ -113,7 +125,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(not(feature = "sync"))]
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    use moka::future::CacheBuilder;
+    use moka::future::Cache;
     use std::fs;
     use std::time::Instant;
 
@@ -124,13 +136,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut metrics = OpMetrics::default();
 
-    let c = CacheBuilder::new(12960).build_with_hasher(DumbBuildHasher::default());
+    let c = Cache::<u64, (String, i64), _>::builder()
+        .max_capacity(1e6 as u64)
+        .weigher(|_k, (_v, cost)| {
+            // The cost is the len() of the value String.
+            (*cost)
+                .try_into()
+                .expect("Cannot convert the cost into u32")
+        })
+        .build_with_hasher(DumbBuildHasher::default());
     let time = Instant::now();
 
     for kv in dataset.data {
         metrics.gets_total += 1;
         if c.get(&kv.hash).is_none() {
-            c.insert(kv.hash, kv.val).await;
+            c.insert(kv.hash, (kv.val, kv.cost)).await;
             metrics.miss += 1;
         } else {
             metrics.hit += 1;
